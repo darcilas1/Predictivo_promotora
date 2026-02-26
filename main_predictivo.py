@@ -264,7 +264,7 @@ def build_cargue_from_df(df_campaign: pd.DataFrame, template_path: Path, multica
             out[col] = ""
  
     out.columns = [c.strip() if isinstance(c, str) else c for c in out.columns]
-    out = out[final_cols].applymap(lambda v: v.strip() if isinstance(v, str) else v).fillna("")
+    out = out[final_cols].map(lambda v: v.strip() if isinstance(v, str) else v).fillna("")
     return out
  
 # ========================= Main =========================
