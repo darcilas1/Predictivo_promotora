@@ -1,0 +1,6 @@
+pandas
+python-dotenv
+tzdata
+boto3
+selenium
+requests
