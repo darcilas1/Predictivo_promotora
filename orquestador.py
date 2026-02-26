@@ -17,18 +17,20 @@ python_exe = sys.executable  # Usa el Python del venv activo
 
 # ----------------------------------------------------------
 # Secuencia de ejecución:
-#   1. RPA_descargue_multicanal.py
-#   2. main_predictivo.py
-#   3. RPA_Cargue.py
+#   1. RPA_descargue_multicanal.py  ← No aborta si falla
+#   2. main_predictivo.py           ← Aborta cadena si falla
+#   3. RPA_Cargue.py                ← Aborta cadena si falla
 #   4. [ESPERA 5 min]   → descargue_gestiones_acuerdos.py
 #   5. [ESPERA 40 min]  → contingencia_descargue_ges_ac.py
 # ----------------------------------------------------------
 
-# Procesos principales (se abortan en cadena si uno falla)
-PROCESOS_PRINCIPALES = [
-    ("Descargue Multicanal",   BASE_DIR / "RPA_descargue_multicanal.py"),
+# Primer proceso: siempre se ejecuta, su fallo NO aborta la cadena
+PROCESO_MULTICANAL = ("Descargue Multicanal", BASE_DIR / "RPA_descargue_multicanal.py")
+
+# Procesos encadenados: si cualquiera falla, se abortan los siguientes
+PROCESOS_ENCADENADOS = [
     ("Procesamiento Predictivo", BASE_DIR / "main_predictivo.py"),
-    ("Cargue Promotora",       BASE_DIR / "RPA_Cargue.py"),
+    ("Cargue Promotora",         BASE_DIR / "RPA_Cargue.py"),
 ]
 
 # Esperas y procesos posteriores
@@ -168,11 +170,21 @@ def main():
     fallidos: list = []
     no_ejecutados: list = []
 
-    # ── FASE 1: Procesos principales (secuenciales, se abortan en cadena) ──
-    log("\n📋 FASE 1: Procesos principales")
+    # ── FASE 1a: Descargue Multicanal (siempre corre, no aborta si falla) ──
+    log("\n📋 FASE 1: Descargue Multicanal (no bloquea si falla)")
+    nombre_mc, ruta_mc = PROCESO_MULTICANAL
+    ok_mc = ejecutar_proceso(nombre_mc, ruta_mc)
+    if ok_mc:
+        exitosos.append(nombre_mc)
+    else:
+        fallidos.append(nombre_mc)
+        log(f"⚠ '{nombre_mc}' falló, pero se continúa con los siguientes procesos.")
+
+    # ── FASE 1b: Procesos encadenados (abortan si cualquiera falla) ──
+    log("\n📋 FASE 1b: Procesos encadenados")
     fallo_principal = False
 
-    for nombre, ruta in PROCESOS_PRINCIPALES:
+    for nombre, ruta in PROCESOS_ENCADENADOS:
         if fallo_principal:
             no_ejecutados.append(nombre)
             log(f"⏭ Proceso omitido (fallo previo): {nombre}")
@@ -185,6 +197,7 @@ def main():
             fallidos.append(nombre)
             fallo_principal = True
             log(f"⚠ Proceso fallido: '{nombre}'. Abortando fase principal...")
+
 
     # ── FASE 2: Descargue Gestiones y Acuerdos (con espera previa de 5 min) ──
     nombre_gest, ruta_gest = PROCESO_DESCARGUE_GESTIONES
