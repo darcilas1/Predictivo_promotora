@@ -71,22 +71,6 @@ def log_espera(segundos: int, motivo: str):
 
 # ========================= TEAMS =========================
 
-def notificar_teams(titulo: str, msg: str):
-    """Envía un mensaje directo a Teams (sin bloquear el flujo)."""
-    if not TEAMS_WEBHOOK_URL:
-        log("⚠ TEAMS_WEBHOOK_URL no configurado. No se enviará notificación a Teams.")
-        return
-    payload = {"text": f"**{titulo}**\n\n{msg}"}
-    try:
-        resp = requests.post(TEAMS_WEBHOOK_URL, json=payload, timeout=10)
-        if resp.status_code != 200:
-            log(f"❌ Error notificando Teams. Status: {resp.status_code}, Resp: {resp.text}")
-        else:
-            log("📨 Notificación enviada a Teams.")
-    except requests.RequestException as e:
-        log(f"❌ Excepción al notificar Teams: {e}")
-
-
 def notificar_teams_resumen(exitosos: list, fallidos: list, no_ejecutados: list):
     """Envía a Teams el resumen final de toda la ejecución."""
     if not TEAMS_WEBHOOK_URL:
@@ -200,15 +184,6 @@ def main():
         else:
             fallidos.append(nombre)
             fallo_principal = True
-            # Notificación inmediata de fallo
-            notificar_teams(
-                titulo=f"❌ Fallo en proceso RPA – {nombre}",
-                msg=(
-                    f"El proceso **{nombre}** falló durante la ejecución.\n"
-                    f"Los procesos siguientes **no se ejecutarán** para evitar datos inconsistentes.\n\n"
-                    f"Revisa los logs en: `logs_orquestador/`"
-                ),
-            )
             log(f"⚠ Proceso fallido: '{nombre}'. Abortando fase principal...")
 
     # ── FASE 2: Descargue Gestiones y Acuerdos (con espera previa de 5 min) ──
@@ -227,14 +202,6 @@ def main():
             exitosos.append(nombre_gest)
         else:
             fallidos.append(nombre_gest)
-            notificar_teams(
-                titulo=f"❌ Fallo en proceso RPA – {nombre_gest}",
-                msg=(
-                    f"El proceso **{nombre_gest}** falló.\n"
-                    f"Se continuará con la contingencia según lo programado.\n\n"
-                    f"Revisa los logs en: `logs_orquestador/`"
-                ),
-            )
 
         # ── FASE 3: Contingencia (con espera previa de 40 min, independiente del fallo de fase 2) ──
         nombre_cont, ruta_cont = PROCESO_CONTINGENCIA
@@ -246,13 +213,6 @@ def main():
             exitosos.append(nombre_cont)
         else:
             fallidos.append(nombre_cont)
-            notificar_teams(
-                titulo=f"❌ Fallo en proceso RPA – {nombre_cont}",
-                msg=(
-                    f"El proceso **{nombre_cont}** (contingencia) falló.\n\n"
-                    f"Revisa los logs en: `logs_orquestador/`"
-                ),
-            )
 
     # ── RESUMEN FINAL ──
     log("\n" + "=" * 65)
