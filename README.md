@@ -37,7 +37,7 @@ Predictivo_promotora/
 ├── orquestador.py                    # Orquestador L-V
 ├── run_orquestador.bat               # Launcher L-V
 │
-├── orquetador_sabado.py              # Orquestador sábado
+├── orquestador_sabado.py             # Orquestador sábado
 ├── run_orquestador_sabado.bat        # Launcher sábado
 │
 ├── RPA_descargue_multicanal.py       # Paso 1 (L-V): Descarga el archivo Multicanal desde el CRM
@@ -147,7 +147,7 @@ run_orquestador_sabado.bat
 ```bash
 # Con el venv activo
 python orquestador.py          # proceso L-V
-python orquetador_sabado.py    # proceso sábado
+python orquestador_sabado.py   # proceso sábado
 ```
 
 ---
@@ -193,15 +193,31 @@ python orquetador_sabado.py    # proceso sábado
 [INICIO]
     │
     ▼
-[1] descarga_predictivo_sabado.py  → Consulta Databricks, filtra PROMOTORA del día,
-    │                                 guarda CSV en /Predictivo/
+[1] RPA_descargue_multicanal.py       → Descarga Multicanal CRM (Selenium) — continúa aunque falle
+    │
+    ▼
+[2] descarga_predictivo_sabado.py     → Consulta Databricks, filtra PROMOTORA del día,
+    │                                    guarda CSV en /Predictivo/
     │  (falla → aborta todo)
     ▼
-[2] predictivo_sabado.py           → Lee el CSV de Databricks, genera CSV de cargue
-    │                                 en formato CRM en /Predictivo/
+[3] predictivo_sabado.py              → Lee el CSV de Databricks, genera CSV de cargue
+    │                                    en formato CRM en /Predictivo/
     │  (falla → aborta todo)
     ▼
-[3] RPA_Cargue.py                  → Carga el CSV predictivo al CRM (Selenium)
+[4] RPA_Cargue.py                     → Carga el CSV predictivo al CRM (Selenium)
+    │  (falla → aborta todo)
+    │
+    ▼
+[ESPERA 5 MINUTOS]
+    │
+    ▼
+[5] descargue_gestiones_acuerdos.py   → Descarga Gestión Universo y Matriz de Acuerdos → S3
+    │
+    ▼
+[ESPERA 40 MINUTOS]
+    │
+    ▼
+[6] contingencia_descargue_ges_ac.py  → Re-descarga si validación corresponde al día
     │
     ▼
 [RESUMEN FINAL → Teams]
@@ -226,8 +242,9 @@ El orquestador envía mensajes al canal de Teams configurado en `TEAMS_WEBHOOK_U
 
 | Ruta | Contenido |
 |---|---|
-| `logs_orquestador/orquestador_YYYYMMDD.log` | Log completo del orquestador (timestamps, stdout/stderr de cada proceso) |
-| `Logs/cargues_log.csv` | Log por archivo de cada cargue realizado en `RPA_Cargue.py` |
+| `logs_orquestador/orquestador_YYYYMMDD.log` | Log del proceso L-V |
+| `logs_orquestador/orquestador_sabado_YYYYMMDD.log` | Log del proceso sábado |
+| `Logs/cargues_log.csv` | Log por archivo de cada cargue en `RPA_Cargue.py` |
 
 ---
 
@@ -239,6 +256,7 @@ requests
 python-dotenv
 pandas
 boto3
+databricks-sql-connector
 ```
 
 ---

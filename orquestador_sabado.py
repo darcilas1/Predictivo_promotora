@@ -17,17 +17,30 @@ python_exe = sys.executable  # Usa el Python del venv activo
 
 # ----------------------------------------------------------
 # Secuencia del proceso SÁBADO:
-#   1. descarga_predictivo_sabado.py  → Descarga datos de Databricks
-#   2. predictivo_sabado.py           → Prepara el CSV de cargue
-#   3. RPA_Cargue.py                  → Carga al CRM
-# Si cualquier proceso falla, se abortan los siguientes.
+#   1. RPA_descargue_multicanal.py      ← No aborta si falla
+#   2. descarga_predictivo_sabado.py    ← Aborta cadena si falla
+#   3. predictivo_sabado.py             ← Aborta cadena si falla
+#   4. RPA_Cargue.py                    ← Aborta cadena si falla
+#   5. [ESPERA 5 min] → descargue_gestiones_acuerdos.py
+#   6. [ESPERA 40 min] → contingencia_descargue_ges_ac.py
 # ----------------------------------------------------------
 
-PROCESOS = [
+# Primer proceso: siempre se ejecuta, su fallo NO aborta la cadena
+PROCESO_MULTICANAL = ("Descargue Multicanal", BASE_DIR / "RPA_descargue_multicanal.py")
+
+# Procesos encadenados: si cualquiera falla, se abortan los siguientes
+PROCESOS_ENCADENADOS = [
     ("Descarga Predictivo Databricks", BASE_DIR / "descarga_predictivo_sabado.py"),
     ("Preparación Predictivo Sábado",  BASE_DIR / "predictivo_sabado.py"),
     ("Cargue Promotora",               BASE_DIR / "RPA_Cargue.py"),
 ]
+
+# Esperas y procesos posteriores (igual que L-V)
+ESPERA_ANTES_DESCARGUE_GESTIONES = 5 * 60   # 5 minutos
+ESPERA_ANTES_CONTINGENCIA        = 40 * 60  # 40 minutos
+
+PROCESO_DESCARGUE_GESTIONES = ("Descargue Gestiones y Acuerdos", BASE_DIR / "descargue_gestiones_acuerdos.py")
+PROCESO_CONTINGENCIA        = ("Contingencia Descargue Gest./Ac.", BASE_DIR / "contingencia_descargue_ges_ac.py")
 
 # Logs
 LOGS_DIR = BASE_DIR / "logs_orquestador"
@@ -46,6 +59,18 @@ def log(msg: str):
     log_file = LOGS_DIR / f"orquestador_sabado_{datetime.now().strftime('%Y%m%d')}.log"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def log_espera(segundos: int, motivo: str):
+    """Muestra un countdown cada minuto mientras espera."""
+    log(f"⏳ Esperando {segundos // 60} minuto(s) antes de: {motivo}")
+    restantes = segundos
+    while restantes > 0:
+        time.sleep(min(60, restantes))
+        restantes -= 60
+        if restantes > 0:
+            log(f"   ⏱  Faltan {restantes // 60} min {restantes % 60} seg para: {motivo}")
+    log(f"✅ Espera finalizada. Iniciando: {motivo}")
 
 
 # ========================= TEAMS =========================
@@ -147,10 +172,22 @@ def main():
     fallidos: list      = []
     no_ejecutados: list = []
 
-    fallo = False
+    # ── FASE 1a: Descargue Multicanal (siempre corre, no aborta si falla) ──
+    log("\n📋 FASE 1a: Descargue Multicanal (no bloquea si falla)")
+    nombre_mc, ruta_mc = PROCESO_MULTICANAL
+    ok_mc = ejecutar_proceso(nombre_mc, ruta_mc)
+    if ok_mc:
+        exitosos.append(nombre_mc)
+    else:
+        fallidos.append(nombre_mc)
+        log(f"⚠ '{nombre_mc}' falló, pero se continúa con los siguientes procesos.")
 
-    for nombre, ruta in PROCESOS:
-        if fallo:
+    # ── FASE 1b: Procesos encadenados (abortan si cualquiera falla) ──
+    log("\n📋 FASE 1b: Procesos encadenados")
+    fallo_principal = False
+
+    for nombre, ruta in PROCESOS_ENCADENADOS:
+        if fallo_principal:
             no_ejecutados.append(nombre)
             log(f"⏭ Proceso omitido (fallo previo): {nombre}")
             continue
@@ -160,8 +197,35 @@ def main():
             exitosos.append(nombre)
         else:
             fallidos.append(nombre)
-            fallo = True
-            log(f"⚠ Proceso fallido: '{nombre}'. Abortando ejecución...")
+            fallo_principal = True
+            log(f"⚠ Proceso fallido: '{nombre}'. Abortando fase principal...")
+
+    # ── FASE 2: Descargue Gestiones y Acuerdos (con espera previa de 5 min) ──
+    nombre_gest, ruta_gest = PROCESO_DESCARGUE_GESTIONES
+    if fallo_principal:
+        no_ejecutados.append(nombre_gest)
+        no_ejecutados.append(PROCESO_CONTINGENCIA[0])
+        log("\n⏭ FASE 2 y 3 omitidas por fallo en fase principal.")
+    else:
+        log(f"\n📋 FASE 2: {nombre_gest} (espera previa de 5 min)")
+        log_espera(ESPERA_ANTES_DESCARGUE_GESTIONES, nombre_gest)
+
+        ok_gest = ejecutar_proceso(nombre_gest, ruta_gest)
+        if ok_gest:
+            exitosos.append(nombre_gest)
+        else:
+            fallidos.append(nombre_gest)
+
+        # ── FASE 3: Contingencia (con espera previa de 40 min) ──
+        nombre_cont, ruta_cont = PROCESO_CONTINGENCIA
+        log(f"\n📋 FASE 3: {nombre_cont} (espera previa de 40 min)")
+        log_espera(ESPERA_ANTES_CONTINGENCIA, nombre_cont)
+
+        ok_cont = ejecutar_proceso(nombre_cont, ruta_cont)
+        if ok_cont:
+            exitosos.append(nombre_cont)
+        else:
+            fallidos.append(nombre_cont)
 
     # ── RESUMEN FINAL ──
     log("\n" + "=" * 65)
