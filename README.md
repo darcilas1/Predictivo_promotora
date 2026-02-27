@@ -25,7 +25,7 @@ Al finalizar cada etapa, el orquestador envía notificaciones a **Microsoft Team
 | Día | Hora | Proceso |
 |---|---|---|
 | Lunes a Viernes | 7:05 PM | `run_orquestador.bat` (proceso principal) |
-| Sábados | 3:05 PM | `run_orquestador_sabado.bat` (proceso sábado) |
+| Sábados | 5:00 PM | `run_orquestador_sabado.bat` (proceso sábado) |
 
 ---
 
