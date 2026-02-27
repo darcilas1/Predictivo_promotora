@@ -4,3 +4,4 @@ tzdata
 boto3
 selenium
 requests
+databricks-sql-connector

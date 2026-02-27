@@ -22,10 +22,10 @@ Al finalizar cada etapa, el orquestador envía notificaciones a **Microsoft Team
 
 ## 🕒 Horario de ejecución
 
-| Día | Hora |
-|---|---|
-| Lunes a Viernes | 7:05 PM |
-| Sábados | 3:05 PM |
+| Día | Hora | Proceso |
+|---|---|---|
+| Lunes a Viernes | 7:05 PM | `run_orquestador.bat` (proceso principal) |
+| Sábados | 3:05 PM | `run_orquestador_sabado.bat` (proceso sábado) |
 
 ---
 
@@ -34,14 +34,20 @@ Al finalizar cada etapa, el orquestador envía notificaciones a **Microsoft Team
 ```
 Predictivo_promotora/
 │
-├── orquestador.py                    # Orquestador principal
-├── run_orquestador.bat               # Script de arranque (activa venv y lanza el orquestador)
+├── orquestador.py                    # Orquestador L-V
+├── run_orquestador.bat               # Launcher L-V
 │
-├── RPA_descargue_multicanal.py       # Paso 1: Descarga el archivo Multicanal desde el CRM
-├── main_predictivo.py                # Paso 2: Procesa y genera el CSV de cargue predictivo
-├── RPA_Cargue.py                     # Paso 3: Carga el CSV predictivo al CRM
-├── descargue_gestiones_acuerdos.py   # Paso 4: Descarga Gestiones y Acuerdos → S3
-├── contingencia_descargue_ges_ac.py  # Paso 5: Contingencia de descarga de Gestiones y Acuerdos
+├── orquetador_sabado.py              # Orquestador sábado
+├── run_orquestador_sabado.bat        # Launcher sábado
+│
+├── RPA_descargue_multicanal.py       # Paso 1 (L-V): Descarga el archivo Multicanal desde el CRM
+├── main_predictivo.py                # Paso 2 (L-V): Procesa y genera el CSV de cargue predictivo via API Wolkvox
+├── RPA_Cargue.py                     # Paso 3 (L-V y Sáb.): Carga el CSV predictivo al CRM
+├── descargue_gestiones_acuerdos.py   # Paso 4 (L-V): Descarga Gestiones y Acuerdos → S3
+├── contingencia_descargue_ges_ac.py  # Paso 5 (L-V): Contingencia de descarga de Gestiones y Acuerdos
+│
+├── descarga_predictivo_sabado.py     # Paso 1 (Sáb.): Descarga datos de Databricks
+├── predictivo_sabado.py             # Paso 2 (Sáb.): Prepara CSV de cargue desde datos Databricks
 │
 ├── formatoArbolProducto.csv          # Template de columnas para el archivo de cargue
 ├── requirements.txt                  # Dependencias Python
@@ -95,9 +101,14 @@ Crear el archivo `.env` en la raíz del proyecto con las siguientes variables:
 USERNAME_VG=<usuario_crm>
 PASSWORD_VG=<contraseña_crm>
 
-# API Wolkvox
+# API Wolkvox (proceso L-V)
 OP04_SERVER=<server_wolkvox>
 OP04_TOKEN=<token_wolkvox>
+
+# Databricks (proceso sábado)
+SERVER_HOSTNAME=<databricks_server_hostname>
+HTTP_PATH=<databricks_http_path>
+ACCESS_TOKEN=<databricks_personal_access_token>
 
 # AWS S3
 AWS_ACCESS_KEY_ID=<access_key>
@@ -115,58 +126,82 @@ TEAMS_WEBHOOK_URL=https://<tu-empresa>.webhook.office.com/webhookb2/...
 
 ## 🚀 Ejecución
 
-### Forma recomendada (producción)
+### Proceso L-V (principal)
 
-Ejecutar el archivo **`run_orquestador.bat`** con doble clic o desde el Programador de tareas de Windows:
+Ejecutar **`run_orquestador.bat`**:
 
 ```bat
 run_orquestador.bat
 ```
 
-Este script:
-1. Se posiciona en la carpeta del proyecto.
-2. Activa el entorno virtual (`venv`).
-3. Lanza `orquestador.py`.
+### Proceso Sábado
+
+Ejecutar **`run_orquestador_sabado.bat`**:
+
+```bat
+run_orquestador_sabado.bat
+```
 
 ### Forma manual (desarrollo / debug)
 
 ```bash
 # Con el venv activo
-python orquestador.py
+python orquestador.py          # proceso L-V
+python orquetador_sabado.py    # proceso sábado
 ```
 
 ---
 
-## 🔄 Flujo detallado del orquestador
+## 🔄 Flujo detallado – Proceso L-V
 
 ```
 [INICIO]
     │
     ▼
-[1] RPA_descargue_multicanal.py   → Descarga el archivo Multicanal del CRM (Selenium)
-    │  (falla → aborta todo + notifica Teams)
+[1] RPA_descargue_multicanal.py   → Descarga Multicanal CRM (Selenium) — continúa aunque falle
+    │
     ▼
 [2] main_predictivo.py            → Consulta API Wolkvox campaign_3, filtra PROMOTORA,
     │                               genera CSV de cargue en /Predictivo/
-    │  (falla → aborta todo + notifica Teams)
+    │  (falla → aborta todo)
     ▼
-[3] RPA_Cargue.py                 → Carga el CSV predictivo al CRM (Selenium, por lotes si aplica)
-    │  (falla → aborta todo + notifica Teams)
+[3] RPA_Cargue.py                 → Carga el CSV predictivo al CRM (Selenium)
+    │  (falla → aborta todo)
     │
     ▼
 [ESPERA 5 MINUTOS]
     │
     ▼
-[4] descargue_gestiones_acuerdos.py → Descarga Gestión Universo y Matriz de Acuerdos,
-    │                                  los sube a S3 (datos-vg/PROMOTORA/)
-    │  (falla → notifica Teams, pero la contingencia IGUAL se ejecuta)
+[4] descargue_gestiones_acuerdos.py → Descarga Gestión Universo y Matriz de Acuerdos → S3
     │
     ▼
 [ESPERA 40 MINUTOS]
     │
     ▼
-[5] contingencia_descargue_ges_ac.py → Re-descarga y sube a S3 si la validación
-                                        de Gestión Universo corresponde al día actual
+[5] contingencia_descargue_ges_ac.py → Re-descarga si validación corresponde al día
+    │
+    ▼
+[RESUMEN FINAL → Teams]
+```
+
+## 🔄 Flujo detallado – Proceso Sábado
+
+> El token de Wolkvox no funciona los sábados a la hora de ejecución, por lo que
+> los datos se obtienen directamente desde **Databricks**.
+
+```
+[INICIO]
+    │
+    ▼
+[1] descarga_predictivo_sabado.py  → Consulta Databricks, filtra PROMOTORA del día,
+    │                                 guarda CSV en /Predictivo/
+    │  (falla → aborta todo)
+    ▼
+[2] predictivo_sabado.py           → Lee el CSV de Databricks, genera CSV de cargue
+    │                                 en formato CRM en /Predictivo/
+    │  (falla → aborta todo)
+    ▼
+[3] RPA_Cargue.py                  → Carga el CSV predictivo al CRM (Selenium)
     │
     ▼
 [RESUMEN FINAL → Teams]
