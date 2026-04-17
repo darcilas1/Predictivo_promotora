@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
 
 from dotenv import load_dotenv
 
@@ -102,9 +102,44 @@ def get_files_flexible(folder_lotes: str, folder_base: str):
         return [get_latest_file(folder_base)]
     return []
 
-def click_if_present(driver, by, selector, timeout=3):
+def _scroll_to_click_target(driver, element):
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
+    driver.execute_script("window.scrollBy(0, -120);")
+    time.sleep(0.4)
+
+def safe_click(driver, by, selector, timeout=20, desc="elemento", max_retries=3):
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            element = WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, selector)))
+            WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((by, selector)))
+            _scroll_to_click_target(driver, element)
+            element.click()
+            print(f"[CLICK] {desc}: click normal OK (intento {attempt}).")
+            return element
+        except ElementClickInterceptedException as exc:
+            last_error = exc
+            print(f"[WARN] {desc}: click interceptado (intento {attempt}). Reintentando con JS...")
+            time.sleep(0.8)
+            try:
+                element = WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, selector)))
+                _scroll_to_click_target(driver, element)
+                driver.execute_script("arguments[0].click();", element)
+                print(f"[CLICK] {desc}: click con JS OK (intento {attempt}).")
+                return element
+            except ElementClickInterceptedException as js_exc:
+                last_error = js_exc
+                print(f"[WARN] {desc}: JS click también fue interceptado (intento {attempt}).")
+                time.sleep(0.8)
+
+    if last_error:
+        raise last_error
+    raise TimeoutException(f"No fue posible hacer click en {desc}")
+
+def click_if_present(driver, by, selector, timeout=3, desc="elemento opcional"):
     try:
-        WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((by, selector))).click()
+        safe_click(driver, by, selector, timeout=timeout, desc=desc)
         return True
     except Exception:
         return False
@@ -115,9 +150,9 @@ def enviar_archivo(driver, ruta_archivo: str, file_input_name="mainForm:fileUplo
     file_input.send_keys(ruta_archivo)
 
     clicked = (
-        click_if_present(driver, By.XPATH, '//*[@id="mainForm:fileUpload"]/div[1]/button[1]', timeout=5)
-        or click_if_present(driver, By.CSS_SELECTOR, ".ui-fileupload-upload", timeout=3)
-        or click_if_present(driver, By.XPATH, "//button[contains(.,'Subir') or contains(.,'Cargar')]", timeout=3)
+        click_if_present(driver, By.XPATH, '//*[@id="mainForm:fileUpload"]/div[1]/button[1]', timeout=5, desc="Botón subir principal")
+        or click_if_present(driver, By.CSS_SELECTOR, ".ui-fileupload-upload", timeout=3, desc="Botón subir CSS")
+        or click_if_present(driver, By.XPATH, "//button[contains(.,'Subir') or contains(.,'Cargar')]", timeout=3, desc="Botón subir genérico")
     )
     return bool(clicked)
 
@@ -185,7 +220,7 @@ def cargar_archivos_secuencial(driver, tipo: str, rutas: list):
 
         try:
             # a veces el input queda “bloqueado” hasta abrir el widget
-            click_if_present(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues"]/div[3]/span', timeout=2)
+            click_if_present(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues"]/div[3]/span', timeout=2, desc="Abrir widget de estructura")
 
             clicked = enviar_archivo(driver, ruta)
             append_log(tipo, nombre, "ENVIADO", f"clicked_upload_button={clicked}")
@@ -228,34 +263,26 @@ try:
     captcha_input.send_keys(Keys.RETURN)
 
     # ---------------- SELECCIÓN CAMPAÑA ----------------
-    wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]')))
-    time.sleep(1)
-    driver.find_element(By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]').click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]', timeout=20, desc="Fila grupo campañas Promotora")
 
-    select_promotora_octubre = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtCampanas:0:j_idt204"]')))
     time.sleep(1)
-    select_promotora_octubre.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:dtCampanas:0:j_idt204"]', timeout=20, desc="Selección campaña Promotora")
 
     # ---------------- IR A IMPORTAR ----------------
-    sidebar_import = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:mnImportar"]/a')))
     time.sleep(1)
-    sidebar_import.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:mnImportar"]/a', timeout=20, desc="Menú Importar")
 
     # ---------------- TIPO DE CARGUE (MISMO FLUJO QUE TENÍAS) ----------------
-    seleccione_tipo = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:j_idt149_label"]')))
     time.sleep(1)
-    seleccione_tipo.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:j_idt149_label"]', timeout=20, desc="Selector tipo de cargue")
 
-    gestion_masiva_arbol_producto = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:j_idt149_10"]')))
-    gestion_masiva_arbol_producto.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:j_idt149_10"]', timeout=20, desc="Tipo gestión masiva árbol producto")
 
     time.sleep(1)
-    seleccion_estructura = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:somConfigCagues"]/div[3]')))
-    seleccion_estructura.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues"]/div[3]', timeout=20, desc="Selector estructura")
 
     # 👇 Dejas el mismo XPATH que ya tenías (no lo cambiamos)
-    sms = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:somConfigCagues_2"]')))
-    sms.click()
+    safe_click(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues_2"]', timeout=20, desc="Opción sms")
 
     # ===================== 1) CARGAR PREDICTIVO (POR LOTES) =====================
     rutas_pred = get_files_flexible(CARPETA_PRED_LOTES, CARPETA_PREDICTIVO)
