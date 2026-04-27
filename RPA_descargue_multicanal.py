@@ -8,6 +8,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from dotenv import load_dotenv
+from crm_navigation import click_by_visible_text, click_campaign_detail_arrow, click_campaign_group_by_text
  
 # ===================== CONFIGURACIÓN =====================
 load_dotenv()
@@ -143,22 +144,13 @@ try:
     captcha_input.send_keys(Keys.RETURN)
  
     # ---------------- SELECCIÓN CAMPAÑA ----------------
-    wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]')))
+    click_campaign_group_by_text(driver)
     time.sleep(1)
-    driver.find_element(By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]').click()
- 
-    select_promotora_octubre = wait.until(
-        EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtCampanas:0:j_idt204"]'))
-    )
-    time.sleep(1)
-    select_promotora_octubre.click()
+    click_campaign_detail_arrow(driver)
  
     # ---------------- IR A MULTICANAL ----------------
-    sidebar_multicanal = wait.until(
-        EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:mnMulticanal"]/a'))
-    )
     time.sleep(2)
-    sidebar_multicanal.click()
+    click_by_visible_text(driver, "Multicanal", desc="Menú Multicanal")
  
     # 🔥 Snapshot ANTES de descargar
     before = list_files(CARPETA_MULTICANAL)

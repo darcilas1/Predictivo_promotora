@@ -15,6 +15,12 @@ from selenium.common.exceptions import TimeoutException, ElementClickIntercepted
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import ClientError
+from crm_navigation import (
+    click_by_visible_text,
+    click_campaign_detail_arrow,
+    click_campaign_group_by_text,
+    select_primefaces_option_by_text,
+)
  
 # =========================
 # Carga de variables (.env)
@@ -260,22 +266,20 @@ captcha_input.send_keys(captcha_text.text)
 captcha_input.send_keys(Keys.RETURN)
  
 # --- Selección de campaña ---
-wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]')))
+click_campaign_group_by_text(driver)
 time.sleep(1)
-driver.find_element(By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]').click()
+click_campaign_detail_arrow(driver)
  
-select_promotora_octubre = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:dtCampanas:0:j_idt204"]')))
-time.sleep(1)
-select_promotora_octubre.click()
- 
-# --- Navegación a Informes (usa safe_click) ---
-safe_click((By.XPATH, '//*[@id="mainForm:j_idt625"]/a'), desc="Menú Exportaciones")
+# --- Navegación a Informes ---
+click_by_visible_text(driver, ["Exportar", "Exportaciones"], desc="Menú Exportar")
 time.sleep(0.5)
-safe_click((By.XPATH, '//*[@id="mainForm:mnInformes"]/a'), desc="Submenú Informes")
+click_by_visible_text(driver, "Informes", desc="Submenú Informes")
  
 # ============ 1) Gestión universo ============
 # Antes: click directo al botón.
 # Ahora: primero valida fila 1 (Informe + Cond Iniciales con fecha de hoy).
+select_primefaces_option_by_text(driver, "Seleccione Uno", "Gestión Universo")
+time.sleep(1)
 if should_download_gestion_universo():
     wait.until(EC.element_to_be_clickable((
         By.XPATH,
@@ -294,9 +298,7 @@ else:
  
 # ============ 2) Matriz de acuerdos ============
 time.sleep(2)
-type_info_generation = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:tipInfo_label"]')))
-type_info_generation.click()
-wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:tipInfo_13"]'))).click()
+select_primefaces_option_by_text(driver, "Seleccione Uno", "Informe Matriz Acuerdos")
  
 # Rango de fechas para acuerdos (tu lógica actual)
 def _format_d_m_yy(d: date) -> str:

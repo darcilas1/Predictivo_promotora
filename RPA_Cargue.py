@@ -13,6 +13,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
 
 from dotenv import load_dotenv
+from crm_navigation import (
+    click_by_visible_text,
+    click_campaign_detail_arrow,
+    click_campaign_group_by_text,
+    select_primefaces_option_by_text,
+)
 
 # ===================== CONFIGURACIÓN =====================
 load_dotenv()
@@ -263,26 +269,20 @@ try:
     captcha_input.send_keys(Keys.RETURN)
 
     # ---------------- SELECCIÓN CAMPAÑA ----------------
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:dtGrupoCampanas_data"]/tr[20]', timeout=20, desc="Fila grupo campañas Promotora")
-
+    click_campaign_group_by_text(driver)
     time.sleep(1)
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:dtCampanas:0:j_idt204"]', timeout=20, desc="Selección campaña Promotora")
+    click_campaign_detail_arrow(driver)
 
     # ---------------- IR A IMPORTAR ----------------
     time.sleep(1)
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:mnImportar"]/a', timeout=20, desc="Menú Importar")
+    click_by_visible_text(driver, "Importar", desc="Menú Importar")
 
-    # ---------------- TIPO DE CARGUE (MISMO FLUJO QUE TENÍAS) ----------------
+    # ---------------- TIPO DE CARGUE ----------------
     time.sleep(1)
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:j_idt149_label"]', timeout=20, desc="Selector tipo de cargue")
-
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:j_idt149_10"]', timeout=20, desc="Tipo gestión masiva árbol producto")
+    select_primefaces_option_by_text(driver, "Seleccione tipo", "GESTION MASIVA ARBOL PRODUCTO")
 
     time.sleep(1)
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues"]/div[3]', timeout=20, desc="Selector estructura")
-
-    # 👇 Dejas el mismo XPATH que ya tenías (no lo cambiamos)
-    safe_click(driver, By.XPATH, '//*[@id="mainForm:somConfigCagues_2"]', timeout=20, desc="Opción sms")
+    select_primefaces_option_by_text(driver, "Seleccione estructura", "SMS")
 
     # ===================== 1) CARGAR PREDICTIVO (POR LOTES) =====================
     rutas_pred = get_files_flexible(CARPETA_PRED_LOTES, CARPETA_PREDICTIVO)
