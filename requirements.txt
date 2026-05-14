@@ -3,5 +3,6 @@ python-dotenv
 tzdata
 boto3
 selenium
+pyotp
 requests
 databricks-sql-connector

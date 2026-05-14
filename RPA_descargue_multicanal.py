@@ -1,5 +1,6 @@
 import os
 import time
+import pyotp
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
@@ -15,6 +16,7 @@ load_dotenv()
  
 USERNAME_VG = os.getenv("USERNAME_VG")
 PASSWORD_VG = os.getenv("PASSWORD_VG")
+MFA_SECRET  = os.getenv("MFA_SECRET")
  
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARPETA_MULTICANAL = os.path.join(BASE_DIR, "Multicanal")
@@ -111,6 +113,54 @@ def click_with_retry(driver, wait, locator, attempts: int = 3):
             raise
     raise StaleElementReferenceException("No se pudo hacer click en el elemento después de varios intentos.")
  
+def ingresar_mfa(driver, wait, contexto: str = "login", max_reintentos: int = 3):
+    """
+    Ingresa el codigo TOTP en el modal de Iagree con reintento automatico.
+    """
+    input_xpath = '//input[contains(@placeholder,"000000") or contains(@placeholder,"0 0 0 0 0 0")]'
+    boton_texto = "Verificar y entrar" if contexto == "login" else "Verificar y descargar"
+    boton_xpath = f'//button[contains(., "{boton_texto}")]'
+    totp = pyotp.TOTP(MFA_SECRET)
+    wait_corto = WebDriverWait(driver, 5)
+
+    for intento in range(1, max_reintentos + 1):
+        wait.until(EC.visibility_of_element_located((By.XPATH, input_xpath)))
+
+        segundos_restantes = 30 - (int(time.time()) % 30)
+        if segundos_restantes < 3:
+            print(f"[MFA] Codigo por expirar en {segundos_restantes}s, esperando el siguiente...")
+            time.sleep(segundos_restantes + 1)
+
+        codigo = totp.now()
+        segundos_restantes = 30 - (int(time.time()) % 30)
+        print(
+            f"[MFA] Intento {intento}/{max_reintentos} | contexto={contexto} | "
+            f"codigo={codigo} | expira en {segundos_restantes}s"
+        )
+
+        campo = wait.until(EC.element_to_be_clickable((By.XPATH, input_xpath)))
+        campo.clear()
+        campo.send_keys(codigo)
+        time.sleep(0.5)
+        wait.until(EC.element_to_be_clickable((By.XPATH, boton_xpath))).click()
+
+        try:
+            wait_corto.until(EC.invisibility_of_element_located((By.XPATH, input_xpath)))
+            print(f"[MFA] Codigo {contexto} verificado correctamente (intento {intento}).")
+            return
+        except TimeoutException:
+            print(
+                f"[MFA] Codigo rechazado (modal sigue visible) en intento {intento}. "
+                "Esperando proximo ciclo de 30s para reintentar..."
+            )
+            tiempo_espera = 30 - (int(time.time()) % 30) + 1
+            time.sleep(tiempo_espera)
+
+    raise RuntimeError(
+        f"[MFA] Fallo la verificacion MFA tras {max_reintentos} intentos ({contexto}). "
+        "Revisa el MFA_SECRET en el .env o el estado de Iagree."
+    )
+
 # ===================== INICIO =====================
 ensure_dir(CARPETA_MULTICANAL)
  
@@ -133,17 +183,29 @@ try:
     driver.get("https://visiong.iagree.co/iAgree/faces/login.xhtml")
     driver.maximize_window()
  
-    wait.until(EC.presence_of_element_located((By.NAME, "loginForm:j_idt22")))
-    driver.find_element(By.NAME, "loginForm:j_idt22").send_keys(USERNAME_VG)
-    driver.find_element(By.NAME, "loginForm:j_idt24").send_keys(PASSWORD_VG)
+    XP_USUARIO = '//input[@placeholder="Usuario" or contains(@placeholder,"suario")]'
+    XP_PASSWORD = '//input[@placeholder="ContraseÃ±a" or @type="password"]'
+    XP_CAPTCHA_IN = '//input[contains(@placeholder,"aptcha") or contains(@placeholder,"APTCHA")]'
+
+    wait.until(EC.presence_of_element_located((By.XPATH, XP_USUARIO)))
+    time.sleep(1)
+    driver.find_element(By.XPATH, XP_USUARIO).send_keys(USERNAME_VG)
+    time.sleep(1)
+    driver.find_element(By.XPATH, XP_PASSWORD).send_keys(PASSWORD_VG)
     time.sleep(2)
  
     captcha_text = driver.find_element(By.ID, "captcha")
-    captcha_input = driver.find_element(By.NAME, "loginForm:j_idt26")
-    captcha_input.send_keys(captcha_text.text)
+    captcha_input = driver.find_element(By.XPATH, XP_CAPTCHA_IN)
+    time.sleep(1)
+    captcha_input.send_keys(captcha_text.text.strip())
+    time.sleep(1)
     captcha_input.send_keys(Keys.RETURN)
+
+    time.sleep(1)
+    ingresar_mfa(driver, wait, contexto="login")
  
     # ---------------- SELECCIÓN CAMPAÑA ----------------
+    time.sleep(1)
     click_campaign_group_by_text(driver)
     time.sleep(1)
     click_campaign_detail_arrow(driver)

@@ -3,6 +3,7 @@ import time
 import glob
 import shutil
 from datetime import datetime, date
+import pyotp
  
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -30,6 +31,7 @@ load_dotenv()
 # Credenciales del portal
 USERNAME_VG = os.getenv("USERNAME_VG")
 PASSWORD_VG = os.getenv("PASSWORD_VG")
+MFA_SECRET  = os.getenv("MFA_SECRET")
  
 # AWS
 AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID")
@@ -200,6 +202,54 @@ def safe_click(locator, desc: str = "", max_retries: int = 3):
 # =========================
 # Verificaciones para Gestión Universo
 # =========================
+def ingresar_mfa(contexto: str = "login", max_reintentos: int = 3):
+    """
+    Ingresa el codigo TOTP en el modal de Iagree con reintento automatico.
+    """
+    input_xpath = '//input[contains(@placeholder,"000000") or contains(@placeholder,"0 0 0 0 0 0")]'
+    boton_texto = "Verificar y entrar" if contexto == "login" else "Verificar y descargar"
+    boton_xpath = f'//button[contains(., "{boton_texto}")]'
+    totp = pyotp.TOTP(MFA_SECRET)
+    wait_corto = WebDriverWait(driver, 5)
+
+    for intento in range(1, max_reintentos + 1):
+        wait.until(EC.visibility_of_element_located((By.XPATH, input_xpath)))
+
+        segundos_restantes = 30 - (int(time.time()) % 30)
+        if segundos_restantes < 3:
+            print(f"[MFA] Codigo por expirar en {segundos_restantes}s, esperando el siguiente...")
+            time.sleep(segundos_restantes + 1)
+
+        codigo = totp.now()
+        segundos_restantes = 30 - (int(time.time()) % 30)
+        print(
+            f"[MFA] Intento {intento}/{max_reintentos} | contexto={contexto} | "
+            f"codigo={codigo} | expira en {segundos_restantes}s"
+        )
+
+        campo = wait.until(EC.element_to_be_clickable((By.XPATH, input_xpath)))
+        campo.clear()
+        campo.send_keys(codigo)
+        time.sleep(0.5)
+        wait.until(EC.element_to_be_clickable((By.XPATH, boton_xpath))).click()
+
+        try:
+            wait_corto.until(EC.invisibility_of_element_located((By.XPATH, input_xpath)))
+            print(f"[MFA] Codigo {contexto} verificado correctamente (intento {intento}).")
+            return
+        except TimeoutException:
+            print(
+                f"[MFA] Codigo rechazado (modal sigue visible) en intento {intento}. "
+                "Esperando proximo ciclo de 30s para reintentar..."
+            )
+            tiempo_espera = 30 - (int(time.time()) % 30) + 1
+            time.sleep(tiempo_espera)
+
+    raise RuntimeError(
+        f"[MFA] Fallo la verificacion MFA tras {max_reintentos} intentos ({contexto}). "
+        "Revisa el MFA_SECRET en el .env o el estado de Iagree."
+    )
+
 def today_iagree_str() -> str:
     """
     Devuelve la fecha de hoy (Bogotá) con el formato que muestra la tabla: 01/ene/26
@@ -264,6 +314,8 @@ captcha_text = driver.find_element(By.ID, "captcha")
 captcha_input = driver.find_element(By.NAME, "loginForm:j_idt26")
 captcha_input.send_keys(captcha_text.text)
 captcha_input.send_keys(Keys.RETURN)
+
+ingresar_mfa(contexto="login")
  
 # --- Selección de campaña ---
 click_campaign_group_by_text(driver)
@@ -285,6 +337,8 @@ if should_download_gestion_universo():
         By.XPATH,
         '/html/body/div[1]/form/div[2]/div[2]/div/div[1]/div/div[1]/div/div/div/div/span[2]/span/div/div/div/div[3]/table/tbody/tr[1]/td[7]/button'
     ))).click()
+
+    ingresar_mfa(contexto="descarga")
  
     file_gestion = wait_for_download_complete(TMP_DOWNLOAD, timeout=600)
     move_and_upload(
@@ -325,6 +379,8 @@ wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExport
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechasta_input"]'))).send_keys(fecha_fin)
  
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:btnDownload"]/span[2]'))).click()
+
+ingresar_mfa(contexto="descarga")
  
 file_acuerdo = wait_for_download_complete(TMP_DOWNLOAD, timeout=600)
 move_and_upload(
