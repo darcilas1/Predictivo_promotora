@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
+from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException, StaleElementReferenceException
 
 from dotenv import load_dotenv
 import boto3
@@ -90,10 +90,12 @@ def wait_for_download_complete(download_dir: str, timeout: int = 600) -> str:
     last_path, last_size, stable = None, -1, 0
     while time.time() < end:
         if glob.glob(os.path.join(download_dir, "*.crdownload")):
-            time.sleep(1); continue
+            time.sleep(1)
+            continue
         files = [f for f in glob.glob(os.path.join(download_dir, "*")) if os.path.isfile(f)]
         if not files:
-            time.sleep(1); continue
+            time.sleep(1)
+            continue
         latest = max(files, key=os.path.getmtime)
         size   = os.path.getsize(latest)
         if latest == last_path and size == last_size:
@@ -134,7 +136,62 @@ def move_and_upload(local_src, target_dir, final_base, s3_prefix):
         print(f"[ERROR] Falló subida a S3: {e}")
         print(f"[KEEP] Conservado local para reintento: {final_path}")
 
+# =========================
+# Blocker helper
+# =========================
+def wait_blocker_disappear(timeout: int = 30):
+    """
+    Espera a que cualquier overlay blocker de PrimeFaces desaparezca.
+    Iagree usa IDs como j_idt483_blocker, j_idt3057_blocker, etc.
+    Buscamos por clase en lugar de ID para cubrir todos los casos.
+    """
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.invisibility_of_element_located(
+                (By.XPATH, '//*[contains(@class,"ui-blockui") and contains(@style,"display: block")]')
+            )
+        )
+    except TimeoutException:
+        print("[WARN] Blocker siguió visible, intentando igual...")
+
+def click_with_blocker_retry(locator, desc: str = "", attempts: int = 4):
+    """
+    Click robusto que espera a que desaparezca el blocker de PrimeFaces antes
+    de cada intento, con fallback a JS click si es interceptado.
+    Cubre: ElementClickInterceptedException y StaleElementReferenceException.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            wait_blocker_disappear(timeout=30)
+            el = wait.until(EC.element_to_be_clickable(locator))
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.3)
+            el.click()
+            if desc:
+                print(f"[CLICK] {desc} (intento {attempt}) OK.")
+            return
+        except ElementClickInterceptedException:
+            print(f"[WARN] Click interceptado en '{desc}' (intento {attempt}), reintentando con JS...")
+            try:
+                el = driver.find_element(*locator)
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                time.sleep(0.3)
+                driver.execute_script("arguments[0].click();", el)
+                if desc:
+                    print(f"[CLICK] {desc} con JS (intento {attempt}) OK.")
+                return
+            except Exception:
+                time.sleep(1)
+        except StaleElementReferenceException:
+            print(f"[WARN] Elemento stale en '{desc}' (intento {attempt}), reintentando...")
+            time.sleep(1)
+        except TimeoutException:
+            print(f"[ERROR] Timeout esperando elemento '{desc}'.")
+            raise
+    raise RuntimeError(f"No se pudo hacer click en '{desc}' después de {attempts} intentos.")
+
 def safe_click(locator, desc="", max_retries=3):
+    """Click simple con fallback a JS — para elementos sin blocker."""
     for attempt in range(1, max_retries + 1):
         try:
             el = wait.until(EC.element_to_be_clickable(locator))
@@ -162,57 +219,67 @@ def safe_click(locator, desc="", max_retries=3):
 # =========================
 def ingresar_mfa(contexto: str = "login", max_reintentos: int = 3):
     """
-    Ingresa el codigo TOTP en el modal de Iagree con reintento automatico.
+    Ingresa el código TOTP en el modal de Iagree con reintento automático.
 
-    Criterio de exito: el input del modal DESAPARECE de la pantalla (modal cerrado).
-    Criterio de fallo: el input sigue visible 5s despues de hacer clic en Verificar.
+    contexto : 'login'    → botón "Verificar y entrar"
+               'descarga' → botón "Verificar y descargar"
 
-    Esto evita falsos positivos por banners de error que quedan en el DOM
-    de intentos anteriores.
+    Criterio de éxito:
+      A) El input del modal DESAPARECE (Iagree cerró el modal) → éxito claro.
+      B) El modal ya no existe al inicio del intento (Iagree lo cerró mientras
+         esperábamos el próximo ciclo de 30s) → también se toma como éxito.
+
+    Criterio de fallo:
+      El input sigue visible 5s después de hacer clic en Verificar → reintenta.
     """
-    input_xpath = '//input[contains(@placeholder,"000000") or contains(@placeholder,"0 0 0 0 0 0")]' 
+    input_xpath = '//input[contains(@placeholder,"000000") or contains(@placeholder,"0 0 0 0 0 0")]'
     boton_texto = "Verificar y entrar" if contexto == "login" else "Verificar y descargar"
-    boton_xpath = f'//button[contains(., "{boton_texto}")]' 
+    boton_xpath = f'//button[contains(., "{boton_texto}")]'
     totp        = pyotp.TOTP(MFA_SECRET)
-    wait_corto  = WebDriverWait(driver, 5)  # timeout corto solo para detectar cierre del modal
+    wait_corto  = WebDriverWait(driver, 5)
 
     for intento in range(1, max_reintentos + 1):
 
-        # Espera a que el modal este visible antes de cada intento
-        wait.until(EC.visibility_of_element_located((By.XPATH, input_xpath)))
+        # ── Caso B: el modal ya desapareció mientras esperábamos ──
+        # Si el input no está visible, Iagree ya procesó el código → éxito.
+        try:
+            wait_corto.until(EC.visibility_of_element_located((By.XPATH, input_xpath)))
+        except TimeoutException:
+            print(f"[MFA] Modal ya no visible al inicio del intento {intento} "
+                  "— Iagree procesó el código correctamente.")
+            return
 
-        # Si quedan < 3s para que el codigo expire, espera el siguiente ciclo
+        # Si quedan < 3s para que el código expire, espera el siguiente ciclo
         segundos_restantes = 30 - (int(time.time()) % 30)
         if segundos_restantes < 3:
-            print(f"[MFA] Codigo por expirar en {segundos_restantes}s, esperando el siguiente...")
+            print(f"[MFA] Código por expirar en {segundos_restantes}s, esperando el siguiente...")
             time.sleep(segundos_restantes + 1)
 
         codigo = totp.now()
         segundos_restantes = 30 - (int(time.time()) % 30)
         print(f"[MFA] Intento {intento}/{max_reintentos} | contexto={contexto} | "
-              f"codigo={codigo} | expira en {segundos_restantes}s")
+              f"código={codigo} | expira en {segundos_restantes}s")
 
-        # Escribe el codigo y hace clic en Verificar
+        # Escribe el código y hace clic en Verificar
         campo = wait.until(EC.element_to_be_clickable((By.XPATH, input_xpath)))
         campo.clear()
         campo.send_keys(codigo)
         time.sleep(0.5)
         wait.until(EC.element_to_be_clickable((By.XPATH, boton_xpath))).click()
 
-        # Criterio de exito: el input del modal desaparece (Iagree cerro el modal)
-        # Si el codigo es rechazado, el modal permanece abierto y esto lanza TimeoutException
+        # ── Caso A: espera a que el modal desaparezca ──
         try:
             wait_corto.until(EC.invisibility_of_element_located((By.XPATH, input_xpath)))
-            print(f"[MFA] Codigo {contexto} verificado correctamente (intento {intento}).")
+            print(f"[MFA] ✓ Código {contexto} verificado correctamente (intento {intento}).")
             return
         except TimeoutException:
-            print(f"[MFA] Codigo rechazado (modal sigue visible) en intento {intento}. "
-                  "Esperando proximo ciclo de 30s para reintentar...")
+            print(f"[MFA] ⚠ Código rechazado (modal sigue visible) en intento {intento}. "
+                  "Esperando próximo ciclo de 30s para reintentar...")
             tiempo_espera = 30 - (int(time.time()) % 30) + 1
             time.sleep(tiempo_espera)
 
     raise RuntimeError(
-        f"[MFA] Fallo la verificacion MFA tras {max_reintentos} intentos ({contexto}). "
+        f"[MFA] ✗ Falló la verificación MFA tras {max_reintentos} intentos ({contexto}). "
         "Revisa el MFA_SECRET en el .env o el estado de Iagree."
     )
 
@@ -223,12 +290,12 @@ driver.get('https://visiong.iagree.co/iAgree/faces/login.xhtml')
 driver.maximize_window()
 
 # --- Login ---
-# XPaths por placeholder: robustos ante cambios de IDs dinámicos de JSF
 XP_USUARIO    = '//input[@placeholder="Usuario" or contains(@placeholder,"suario")]'
 XP_PASSWORD   = '//input[@placeholder="Contraseña" or @type="password"]'
 XP_CAPTCHA_IN = '//input[contains(@placeholder,"aptcha") or contains(@placeholder,"APTCHA")]'
 
 wait.until(EC.presence_of_element_located((By.XPATH, XP_USUARIO)))
+time.sleep(3)
 driver.find_element(By.XPATH, XP_USUARIO).send_keys(USERNAME_VG)
 driver.find_element(By.XPATH, XP_PASSWORD).send_keys(PASSWORD_VG)
 time.sleep(2)
@@ -265,7 +332,12 @@ time.sleep(1)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechDesde_input"]'))).send_keys(fecha_inicio_gestion)
 time.sleep(1)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechasta_input"]'))).send_keys(fecha_fin_gestion)
-wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:btnDownload"]/span[2]'))).click()
+
+# Botón descargar Gestiones — con blocker handler
+click_with_blocker_retry(
+    (By.XPATH, '//*[@id="mainForm:pgMenuExportacion:btnDownload"]/span[2]'),
+    desc="Botón descargar Gestiones"
+)
 
 # --- MFA Descarga Gestiones ---
 ingresar_mfa(contexto="descarga")
@@ -292,11 +364,19 @@ fecha_fin      = _format_d_m_yy(_add_ten_years(primer_dia_mes))
 
 time.sleep(1)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechDesde_input"]'))).clear()
+time.sleep(2)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechDesde_input"]'))).send_keys(fecha_inicio)
 time.sleep(1)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechasta_input"]'))).clear()
+time.sleep(2)
 wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:fechasta_input"]'))).send_keys(fecha_fin)
-wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainForm:pgMenuExportacion:btnDownload"]/span[2]'))).click()
+time.sleep(2)
+
+# Botón descargar Acuerdos — con blocker handler
+click_with_blocker_retry(
+    (By.XPATH, '//*[@id="mainForm:pgMenuExportacion:btnDownload"]/span[2]'),
+    desc="Botón descargar Acuerdos"
+)
 
 # --- MFA Descarga Acuerdos ---
 ingresar_mfa(contexto="descarga")
